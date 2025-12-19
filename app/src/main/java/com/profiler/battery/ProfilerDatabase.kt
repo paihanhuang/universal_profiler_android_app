@@ -30,7 +30,7 @@ class ProfilerDatabase private constructor(context: Context) : SQLiteOpenHelper(
     
     companion object {
         const val DATABASE_NAME = "profiler.db"
-        const val DATABASE_VERSION = 2
+        const val DATABASE_VERSION = 3  // Added wake_reason column
         
         // MetaData table
         const val TABLE_METADATA = "MetaData"
@@ -46,6 +46,7 @@ class ProfilerDatabase private constructor(context: Context) : SQLiteOpenHelper(
         const val COL_SCREEN_WALL_CLOCK_MS = "wall_clock_ms"
         const val COL_SCREEN_EVENT_TYPE = "event_type"
         const val COL_SCREEN_BATTERY_MAH = "battery_mah"
+        const val COL_SCREEN_REASON = "wake_reason"
         const val COL_SCREEN_SESSION_ID = "session_id"
         
         // Event type constants
@@ -122,6 +123,7 @@ class ProfilerDatabase private constructor(context: Context) : SQLiteOpenHelper(
                 $COL_SCREEN_WALL_CLOCK_MS INTEGER NOT NULL,
                 $COL_SCREEN_EVENT_TYPE INTEGER NOT NULL,
                 $COL_SCREEN_BATTERY_MAH INTEGER,
+                $COL_SCREEN_REASON INTEGER DEFAULT 0,
                 $COL_SCREEN_SESSION_ID TEXT NOT NULL
             )
         """.trimIndent())
@@ -151,8 +153,8 @@ class ProfilerDatabase private constructor(context: Context) : SQLiteOpenHelper(
         return insertScreenStateStmt ?: run {
             val stmt = writableDatabase.compileStatement("""
                 INSERT INTO $TABLE_SCREEN_STATE 
-                ($COL_SCREEN_MONOTONIC_MS, $COL_SCREEN_WALL_CLOCK_MS, $COL_SCREEN_EVENT_TYPE, $COL_SCREEN_BATTERY_MAH, $COL_SCREEN_SESSION_ID)
-                VALUES (?, ?, ?, ?, ?)
+                ($COL_SCREEN_MONOTONIC_MS, $COL_SCREEN_WALL_CLOCK_MS, $COL_SCREEN_EVENT_TYPE, $COL_SCREEN_BATTERY_MAH, $COL_SCREEN_REASON, $COL_SCREEN_SESSION_ID)
+                VALUES (?, ?, ?, ?, ?, ?)
             """.trimIndent())
             insertScreenStateStmt = stmt
             stmt
@@ -184,6 +186,7 @@ class ProfilerDatabase private constructor(context: Context) : SQLiteOpenHelper(
         wallClockMs: Long,
         eventType: Int,
         batteryMah: Int?,
+        reason: Int,
         sessionId: String
     ): Long = statementLock.withLock {
         val stmt = getInsertScreenStateStatement()
@@ -196,7 +199,8 @@ class ProfilerDatabase private constructor(context: Context) : SQLiteOpenHelper(
         } else {
             stmt.bindNull(4)
         }
-        stmt.bindString(5, sessionId)
+        stmt.bindLong(5, reason.toLong())
+        stmt.bindString(6, sessionId)
         stmt.executeInsert()
     }
     
@@ -258,6 +262,7 @@ class ProfilerDatabase private constructor(context: Context) : SQLiteOpenHelper(
                     event.wallClockMs,
                     event.eventType,
                     event.batteryMah,
+                    event.reason,
                     event.sessionId
                 )
             }
@@ -290,6 +295,7 @@ class ProfilerDatabase private constructor(context: Context) : SQLiteOpenHelper(
             val wallIdx = it.getColumnIndexOrThrow(COL_SCREEN_WALL_CLOCK_MS)
             val typeIdx = it.getColumnIndexOrThrow(COL_SCREEN_EVENT_TYPE)
             val batteryIdx = it.getColumnIndexOrThrow(COL_SCREEN_BATTERY_MAH)
+            val reasonIdx = it.getColumnIndexOrThrow(COL_SCREEN_REASON)
             val sessionIdx = it.getColumnIndexOrThrow(COL_SCREEN_SESSION_ID)
             
             while (it.moveToNext()) {
@@ -300,6 +306,7 @@ class ProfilerDatabase private constructor(context: Context) : SQLiteOpenHelper(
                         wallClockMs = it.getLong(wallIdx),
                         eventType = it.getInt(typeIdx),
                         batteryMah = it.getInt(batteryIdx),
+                        reason = it.getInt(reasonIdx),
                         sessionId = it.getString(sessionIdx)
                     )
                 )
@@ -346,7 +353,7 @@ class ProfilerDatabase private constructor(context: Context) : SQLiteOpenHelper(
         )
         
         val sb = StringBuilder(4096)  // Pre-sized to reduce reallocation
-        sb.appendLine("id,monotonic_ms,wall_clock_ms,event_type,battery_mah,session_id")
+        sb.appendLine("id,monotonic_ms,wall_clock_ms,event_type,battery_mah,wake_reason,session_id")
         
         cursor.use {
             // Cache column indexes
@@ -355,6 +362,7 @@ class ProfilerDatabase private constructor(context: Context) : SQLiteOpenHelper(
             val wallIdx = it.getColumnIndexOrThrow(COL_SCREEN_WALL_CLOCK_MS)
             val typeIdx = it.getColumnIndexOrThrow(COL_SCREEN_EVENT_TYPE)
             val batteryIdx = it.getColumnIndexOrThrow(COL_SCREEN_BATTERY_MAH)
+            val reasonIdx = it.getColumnIndexOrThrow(COL_SCREEN_REASON)
             val sessionIdx = it.getColumnIndexOrThrow(COL_SCREEN_SESSION_ID)
             
             while (it.moveToNext()) {
@@ -367,6 +375,8 @@ class ProfilerDatabase private constructor(context: Context) : SQLiteOpenHelper(
                 sb.append(it.getInt(typeIdx))
                 sb.append(',')
                 sb.append(it.getInt(batteryIdx))
+                sb.append(',')
+                sb.append(it.getInt(reasonIdx))
                 sb.append(',')
                 sb.appendLine(it.getString(sessionIdx))
             }
@@ -387,34 +397,3 @@ class ProfilerDatabase private constructor(context: Context) : SQLiteOpenHelper(
         super.close()
     }
 }
-
-/**
- * Data class for screen state event (used for batch inserts).
- */
-data class ScreenStateEvent(
-    val monotonicMs: Long,
-    val wallClockMs: Long,
-    val eventType: Int,
-    val batteryMah: Int?,
-    val sessionId: String
-)
-
-/**
- * Data class for screen state records (read from DB).
- */
-data class ScreenStateRecord(
-    val id: Long,
-    val monotonicMs: Long,
-    val wallClockMs: Long,
-    val eventType: Int,
-    val batteryMah: Int,
-    val sessionId: String
-) {
-    fun getEventTypeName(): String = when (eventType) {
-        ProfilerDatabase.EVENT_SCREEN_OFF -> "SCREEN_OFF"
-        ProfilerDatabase.EVENT_SCREEN_ON -> "SCREEN_ON"
-        ProfilerDatabase.EVENT_USER_PRESENT -> "USER_UNLOCK"
-        else -> "UNKNOWN"
-    }
-}
-

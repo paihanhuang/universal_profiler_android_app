@@ -54,8 +54,7 @@ class ProfilerService : Service() {
     }
     
     private lateinit var receiver: PowerEventReceiver
-    private lateinit var database: ProfilerDatabase
-    private lateinit var batchWriter: BatchWriter
+    private lateinit var dbHandler: DBHandler
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     
     override fun onCreate() {
@@ -64,18 +63,15 @@ class ProfilerService : Service() {
         // Generate session ID based on boot ID + app start time
         sessionId = "${BootSession.bootId}_${BootSession.appStartWallClockMs}"
         
-        // Initialize database and batch writer
-        database = ProfilerDatabase.getInstance(this)
-        batchWriter = BatchWriter.getInstance(this)
+        // Initialize DB handler (centralized database access)
+        dbHandler = DBHandler.getInstance(this)
         
-        // Insert system metadata for this session
-        serviceScope.launch {
-            database.insertSystemInfo(this@ProfilerService, sessionId)
-        }
+        // Insert system metadata for this session via message queue
+        dbHandler.send(DBMessage.InsertSystemInfo(this, sessionId))
         
-        // Create receiver with database write callback
+        // Create receiver with callback to flush buffer
         receiver = PowerEventReceiver(eventBuffer) {
-            // Called when screen turns ON - parse buffer and queue to batch writer
+            // Called when screen turns ON - parse buffer and send to DBHandler
             flushBufferAsync()
         }
         
@@ -104,9 +100,9 @@ class ProfilerService : Service() {
             // Already unregistered
         }
         
-        // Final flush - parse remaining buffer and force flush batch writer
+        // Final flush - parse remaining buffer and flush via DBHandler
         flushBufferSync()
-        batchWriter.forceFlush()
+        dbHandler.sendSync(DBMessage.FlushPending())
         
         // Cancel coroutine scope
         serviceScope.cancel()
@@ -131,10 +127,8 @@ class ProfilerService : Service() {
     }
     
     /**
-     * Flush ring buffer to batch writer.
-     * Events are queued and will be written to DB when:
-     * - 500 events are queued, OR
-     * - 5 minutes have passed since first queued event
+     * Flush ring buffer to DBHandler via message queue.
+     * Events are batched by DBHandler (500 ops or 5 min threshold).
      */
     private fun flushBufferSync() {
         // Drain buffer
@@ -147,7 +141,7 @@ class ProfilerService : Service() {
         
         sb.lines().filter { it.isNotBlank() }.forEach { line ->
             val parts = line.split(",")
-            if (parts.size >= 4) {
+            if (parts.size >= 5) {
                 try {
                     events.add(
                         ScreenStateEvent(
@@ -155,6 +149,7 @@ class ProfilerService : Service() {
                             wallClockMs = parts[1].toLong(),
                             eventType = parts[2].toInt(),
                             batteryMah = parts[3].toIntOrNull(),
+                            reason = parts[4].toIntOrNull() ?: 0,
                             sessionId = sessionId
                         )
                     )
@@ -164,9 +159,9 @@ class ProfilerService : Service() {
             }
         }
         
-        // Queue events to batch writer (will flush at 500 ops or 5 min)
+        // Send to DBHandler via message queue (batched, FIFO)
         if (events.isNotEmpty()) {
-            batchWriter.queueEvents(events)
+            dbHandler.send(DBMessage.InsertScreenStateBatch(events))
         }
     }
     

@@ -93,26 +93,30 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun viewLog() {
-        val database = ProfilerDatabase.getInstance(this)
-        val csv = database.exportToCsv()
-        // Don't close singleton
+        val dbHandler = DBHandler.getInstance(this)
         
-        if (csv.lines().size <= 1) {
-            Toast.makeText(this, "No data yet", Toast.LENGTH_SHORT).show()
-            return
-        }
-        
-        // Share CSV data
-        val intent = Intent(Intent.ACTION_SEND).apply {
-            type = "text/csv"
-            putExtra(Intent.EXTRA_TEXT, csv)
-            putExtra(Intent.EXTRA_SUBJECT, "Battery Profiler Data")
-        }
-        startActivity(Intent.createChooser(intent, "Share Data"))
+        // Request CSV export via message queue with callback
+        dbHandler.send(DBMessage.ExportToCsv { csv ->
+            runOnUiThread {
+                if (csv.lines().size <= 1) {
+                    Toast.makeText(this, "No data yet", Toast.LENGTH_SHORT).show()
+                    return@runOnUiThread
+                }
+                
+                // Share CSV data
+                val intent = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/csv"
+                    putExtra(Intent.EXTRA_TEXT, csv)
+                    putExtra(Intent.EXTRA_SUBJECT, "Battery Profiler Data")
+                }
+                startActivity(Intent.createChooser(intent, "Share Data"))
+            }
+        })
     }
     
     private fun clearLog() {
-        // Close singleton and delete database
+        // Close handlers and delete database
+        DBHandler.closeInstance()
         ProfilerDatabase.closeInstance()
         deleteDatabase(ProfilerDatabase.DATABASE_NAME)
         Toast.makeText(this, "Database cleared", Toast.LENGTH_SHORT).show()
@@ -121,11 +125,8 @@ class MainActivity : AppCompatActivity() {
     
     private fun updateStatus() {
         val isRunning = ProfilerService.isRunning
-        val database = ProfilerDatabase.getInstance(this)
-        val eventCount = database.getEventCount()
-        val dbSize = database.getDatabaseSize(this)
-        // Don't close singleton
         
+        // Update UI immediately for status
         statusText.text = if (isRunning) "Status: RUNNING" else "Status: STOPPED"
         statusText.setTextColor(
             if (isRunning) 
@@ -134,11 +135,23 @@ class MainActivity : AppCompatActivity() {
                 ContextCompat.getColor(this, android.R.color.holo_red_dark)
         )
         
-        eventCountText.text = "Events in DB: $eventCount"
-        logSizeText.text = "DB size: ${formatBytes(dbSize)}"
-        
         startButton.isEnabled = !isRunning
         stopButton.isEnabled = isRunning
+        
+        // Get database stats via message queue
+        val dbHandler = DBHandler.getInstance(this)
+        
+        dbHandler.send(DBMessage.GetEventCount { count ->
+            runOnUiThread {
+                eventCountText.text = "Events in DB: $count"
+            }
+        })
+        
+        dbHandler.send(DBMessage.GetDatabaseSize(this) { size ->
+            runOnUiThread {
+                logSizeText.text = "DB size: ${formatBytes(size)}"
+            }
+        })
     }
     
     private fun formatBytes(bytes: Long): String {

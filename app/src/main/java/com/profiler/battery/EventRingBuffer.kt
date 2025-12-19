@@ -10,7 +10,7 @@ import java.util.concurrent.atomic.AtomicInteger
  * - Pre-allocated arrays to avoid GC during logging
  * - Atomic operations for thread safety without locks
  * - Dual timestamps (monotonic + wall clock) for robust time tracking
- * - Minimal memory footprint: ~21 bytes per event
+ * - Minimal memory footprint: ~25 bytes per event (with reason)
  * 
  * Thread safety:
  * - Single producer (BroadcastReceiver on main thread) is typical
@@ -29,6 +29,7 @@ class EventRingBuffer(private val capacity: Int = 1024) {
     private val wallClockMs = LongArray(capacity)   // User-visible time
     private val eventTypes = ByteArray(capacity)
     private val batteryMah = IntArray(capacity)
+    private val reasons = IntArray(capacity)         // Wake/sleep reason codes
     
     // Atomic indices for lock-free operation
     private val writeIndex = AtomicInteger(0)
@@ -44,8 +45,9 @@ class EventRingBuffer(private val capacity: Int = 1024) {
      * 
      * @param eventType Event type code (SCREEN_OFF, SCREEN_ON, USER_PRESENT)
      * @param mah Battery remaining capacity in mAh (-1 if unavailable)
+     * @param reason Wake/sleep reason code
      */
-    fun add(eventType: Byte, mah: Int) {
+    fun add(eventType: Byte, mah: Int, reason: Int = 0) {
         // Capture both timestamps as close together as possible
         val monotonic = SystemClock.elapsedRealtime()
         val wallClock = System.currentTimeMillis()
@@ -55,19 +57,20 @@ class EventRingBuffer(private val capacity: Int = 1024) {
         wallClockMs[idx] = wallClock
         eventTypes[idx] = eventType
         batteryMah[idx] = mah
+        reasons[idx] = reason
     }
     
     /**
-     * Convenience method to add event with automatic timestamp capture.
+     * Convenience methods to add events with automatic timestamp capture.
      */
-    fun addScreenOff(mah: Int) = add(EVENT_SCREEN_OFF, mah)
-    fun addScreenOn(mah: Int) = add(EVENT_SCREEN_ON, mah)
-    fun addUserPresent(mah: Int) = add(EVENT_USER_PRESENT, mah)
+    fun addScreenOff(mah: Int, reason: Int = 0) = add(EVENT_SCREEN_OFF, mah, reason)
+    fun addScreenOn(mah: Int, reason: Int = 0) = add(EVENT_SCREEN_ON, mah, reason)
+    fun addUserPresent(mah: Int, reason: Int = 0) = add(EVENT_USER_PRESENT, mah, reason)
     
     /**
      * Drain all pending events to a StringBuilder for file output.
      * 
-     * Format: monotonic_ms,wall_clock_ms,event_type,battery_mah
+     * Format: monotonic_ms,wall_clock_ms,event_type,battery_mah,reason
      * 
      * @param output StringBuilder to append events to
      * @return Number of events drained
@@ -86,6 +89,8 @@ class EventRingBuffer(private val capacity: Int = 1024) {
                 .append(eventTypes[idx].toInt())
                 .append(',')
                 .append(batteryMah[idx])
+                .append(',')
+                .append(reasons[idx])
                 .append('\n')
             read++
             count++
