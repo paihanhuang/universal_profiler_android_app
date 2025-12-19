@@ -64,7 +64,12 @@ class PowerEventReceiverTest {
                 
             latch.countDown()
             null
-        }.`when`(eventBuffer).addScreenOn(Mockito.anyInt(), Mockito.anyInt())
+        }.`when`(eventBuffer).addScreenOn(
+            Mockito.anyInt(), 
+            Mockito.anyInt(), 
+            Mockito.anyLong(), 
+            Mockito.anyLong()
+        )
 
         // Execute onReceive with real context
         receiver.onReceive(context, intent)
@@ -74,7 +79,12 @@ class PowerEventReceiverTest {
         assertTrue("Background processing should complete", completed)
         
         // Verify method called
-        Mockito.verify(eventBuffer).addScreenOn(Mockito.anyInt(), Mockito.anyInt())
+        Mockito.verify(eventBuffer).addScreenOn(
+            Mockito.anyInt(), 
+            Mockito.anyInt(), 
+            Mockito.anyLong(), 
+            Mockito.anyLong()
+        )
     }
     
     @org.junit.After

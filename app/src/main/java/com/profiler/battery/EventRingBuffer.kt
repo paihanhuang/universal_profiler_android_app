@@ -38,19 +38,22 @@ class EventRingBuffer(private val capacity: Int = 1024) {
     /**
      * Add an event to the buffer.
      * 
-     * - O(1) time complexity
-     * - No allocations
-     * - No blocking
-     * - Captures both timestamps atomically
-     * 
-     * @param eventType Event type code (SCREEN_OFF, SCREEN_ON, USER_PRESENT)
-     * @param mah Battery remaining capacity in mAh (-1 if unavailable)
+     * @param eventType Event type code
+     * @param mah Battery remaining capacity
      * @param reason Wake/sleep reason code
+     * @param timestampMonotonic Optional explicit monotonic timestamp
+     * @param timestampWallClock Optional explicit wall clock timestamp
      */
-    fun add(eventType: Byte, mah: Int, reason: Int = 0) {
-        // Capture both timestamps as close together as possible
-        val monotonic = SystemClock.elapsedRealtime()
-        val wallClock = System.currentTimeMillis()
+    fun add(
+        eventType: Byte, 
+        mah: Int, 
+        reason: Int = 0,
+        timestampMonotonic: Long? = null,
+        timestampWallClock: Long? = null
+    ) {
+        // Use provided timestamps or capture current time
+        val monotonic = timestampMonotonic ?: SystemClock.elapsedRealtime()
+        val wallClock = timestampWallClock ?: System.currentTimeMillis()
         
         val idx = writeIndex.getAndIncrement() % capacity
         monotonicMs[idx] = monotonic
@@ -63,9 +66,14 @@ class EventRingBuffer(private val capacity: Int = 1024) {
     /**
      * Convenience methods to add events with automatic timestamp capture.
      */
-    fun addScreenOff(mah: Int, reason: Int = 0) = add(EVENT_SCREEN_OFF, mah, reason)
-    fun addScreenOn(mah: Int, reason: Int = 0) = add(EVENT_SCREEN_ON, mah, reason)
-    fun addUserPresent(mah: Int, reason: Int = 0) = add(EVENT_USER_PRESENT, mah, reason)
+    fun addScreenOff(mah: Int, reason: Int = 0, mono: Long? = null, wall: Long? = null) = 
+        add(EVENT_SCREEN_OFF, mah, reason, mono, wall)
+        
+    fun addScreenOn(mah: Int, reason: Int = 0, mono: Long? = null, wall: Long? = null) = 
+        add(EVENT_SCREEN_ON, mah, reason, mono, wall)
+        
+    fun addUserPresent(mah: Int, reason: Int = 0, mono: Long? = null, wall: Long? = null) = 
+        add(EVENT_USER_PRESENT, mah, reason, mono, wall)
     
     /**
      * Drain all pending events to a StringBuilder for file output.

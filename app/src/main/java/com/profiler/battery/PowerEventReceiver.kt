@@ -70,9 +70,13 @@ class PowerEventReceiver(
         // Capture action on main thread (fast)
         val action = intent.action ?: return
         
+        // Capture timestamps IMMEDIATELY upon receipt for precision
+        val nowMonotonic = android.os.SystemClock.elapsedRealtime()
+        val nowWallClock = System.currentTimeMillis()
+        
         // Dispatch all processing to dedicated broadcast handler thread
         broadcastHandler.post {
-            processBroadcast(context, action)
+            processBroadcast(context, action, nowMonotonic, nowWallClock)
         }
     }
     
@@ -80,7 +84,12 @@ class PowerEventReceiver(
      * Process broadcast on dedicated handler thread.
      * Called from AndroidBroadcastHandler thread, NOT main thread.
      */
-    private fun processBroadcast(context: Context, action: String) {
+    private fun processBroadcast(
+        context: Context, 
+        action: String, 
+        timestampMonotonic: Long, 
+        timestampWallClock: Long
+    ) {
         // Get battery manager for capacity reading
         val batteryManager = context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
         
@@ -98,22 +107,22 @@ class PowerEventReceiver(
         when (action) {
             Intent.ACTION_SCREEN_OFF -> {
                 val reason = detectScreenOffReason(context)
-                lastScreenOffTime = System.currentTimeMillis()
+                lastScreenOffTime = timestampWallClock
                 // Memory write only - do NOT flush to file here
                 // System is about to suspend, we must not delay it
-                eventBuffer.addScreenOff(mah, reason)
+                eventBuffer.addScreenOff(mah, reason, timestampMonotonic, timestampWallClock)
             }
             
             Intent.ACTION_SCREEN_ON -> {
                 val reason = detectScreenOnReason(context)
-                lastScreenOnTime = System.currentTimeMillis()
-                eventBuffer.addScreenOn(mah, reason)
+                lastScreenOnTime = timestampWallClock
+                eventBuffer.addScreenOn(mah, reason, timestampMonotonic, timestampWallClock)
                 // Safe to flush - user is awake anyway, no additional power cost
                 onScreenOn?.invoke()
             }
             
             Intent.ACTION_USER_PRESENT -> {
-                eventBuffer.addUserPresent(mah, REASON_UNLOCK)
+                eventBuffer.addUserPresent(mah, REASON_UNLOCK, timestampMonotonic, timestampWallClock)
             }
         }
     }
