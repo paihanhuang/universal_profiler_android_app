@@ -17,38 +17,49 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
 /**
- * Foreground service for continuous power event profiling.
+ * Core persistent service for continuous power event profiling.
  * 
- * Design principles:
- * - Minimal foreground notification (required for Android 8+)
- * - Registers BroadcastReceiver for power events
- * - Flushes buffer to file only when screen turns ON (suspend-safe)
- * - NO wake locks - does not interfere with system suspend
+ * Responsibilities:
+ * - Starts at boot (via BootReceiver)
+ * - Always runs in foreground (with minimal notification)
+ * - Owns the database handler and event buffer
+ * - Registers PowerEventReceiver to track screen state
+ * - Does NOT prevent system suspend (no WakeLocks)
  */
-class ProfilerService : Service() {
+class CoreService : Service() {
     
     companion object {
         private const val NOTIFICATION_ID = 1
-        private const val CHANNEL_ID = "profiler_channel"
+        private const val CHANNEL_ID = "core_profiler_channel"
         
-        // Shared event buffer - accessible from receiver and for status display
+        // Shared event buffer
         val eventBuffer = EventRingBuffer(1024)
         
         // Current session ID
         var sessionId: String = ""
             private set
         
-        // Service state
+        // Service state for UI
         var isRunning = false
             private set
         
+        /**
+         * Start the service (idempotent).
+         */
         fun start(context: Context) {
-            val intent = Intent(context, ProfilerService::class.java)
-            context.startForegroundService(intent)
+            val intent = Intent(context, CoreService::class.java)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
         }
         
+        /**
+         * Stop the service (explicit user action).
+         */
         fun stop(context: Context) {
-            val intent = Intent(context, ProfilerService::class.java)
+            val intent = Intent(context, CoreService::class.java)
             context.stopService(intent)
         }
     }
@@ -62,15 +73,16 @@ class ProfilerService : Service() {
         super.onCreate()
         
         // Generate session ID based on boot ID + app start time
+        // If restarting after crash, this preserves the session continuity relative to boot
         sessionId = "${BootSession.bootId}_${BootSession.appStartWallClockMs}"
         
         // Initialize DB handler (centralized database access)
         dbHandler = DBHandler.getInstance(this)
         
-        // Insert system metadata for this session via message queue
+        // Insert system metadata for this session (idempotent-ish)
         dbHandler.send(DBMessage.InsertSystemInfo(this, sessionId))
         
-        // Create broadcast handler thread for processing broadcasts off main thread
+        // Create broadcast handler thread
         broadcastHandler = AndroidBroadcastHandler()
         
         // Create receiver with callback to flush buffer
@@ -94,6 +106,11 @@ class ProfilerService : Service() {
         isRunning = true
     }
     
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // START_STICKY ensures service restarts if killed by system
+        return START_STICKY
+    }
+    
     override fun onDestroy() {
         isRunning = false
         
@@ -104,11 +121,11 @@ class ProfilerService : Service() {
             // Already unregistered
         }
         
-        // Final flush - parse remaining buffer and flush via DBHandler
+        // Final flush
         flushBufferSync()
         dbHandler.sendSync(DBMessage.FlushPending())
         
-        // Shutdown broadcast handler thread
+        // Shutdown broadcast handler
         broadcastHandler.shutdown()
         
         // Cancel coroutine scope
@@ -119,13 +136,8 @@ class ProfilerService : Service() {
     
     override fun onBind(intent: Intent?): IBinder? = null
     
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        return START_STICKY
-    }
-    
     /**
-     * Flush buffer asynchronously (called on SCREEN_ON).
-     * Uses IO dispatcher to avoid blocking main thread.
+     * Flush buffer asynchronously.
      */
     private fun flushBufferAsync() {
         serviceScope.launch {
@@ -134,16 +146,13 @@ class ProfilerService : Service() {
     }
     
     /**
-     * Flush ring buffer to DBHandler via message queue.
-     * Events are batched by DBHandler (500 ops or 5 min threshold).
+     * Flush ring buffer to DBHandler.
      */
     private fun flushBufferSync() {
-        // Drain buffer
         val sb = StringBuilder()
         val count = eventBuffer.drain(sb)
         if (count == 0) return
         
-        // Parse CSV into event list
         val events = mutableListOf<ScreenStateEvent>()
         
         sb.lines().filter { it.isNotBlank() }.forEach { line ->
@@ -161,33 +170,33 @@ class ProfilerService : Service() {
                         )
                     )
                 } catch (e: Exception) {
-                    // Skip malformed entries
+                    // Skip malformed
                 }
             }
         }
         
-        // Send to DBHandler via message queue (batched, FIFO)
         if (events.isNotEmpty()) {
             dbHandler.send(DBMessage.InsertScreenStateBatch(events))
         }
     }
     
     private fun createNotificationChannel() {
-        val channel = NotificationChannel(
-            CHANNEL_ID,
-            "Battery Profiler",
-            NotificationManager.IMPORTANCE_LOW  // Minimal intrusion
-        ).apply {
-            description = "Battery profiling is active"
-            setShowBadge(false)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "Core Service",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Continuous system profiling"
+                setShowBadge(false)
+            }
+            
+            val manager = getSystemService(NotificationManager::class.java)
+            manager.createNotificationChannel(channel)
         }
-        
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(channel)
     }
     
     private fun createNotification(): Notification {
-        // Intent to open main activity when notification tapped
         val pendingIntent = PendingIntent.getActivity(
             this,
             0,
@@ -196,8 +205,8 @@ class ProfilerService : Service() {
         )
         
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Battery Profiler Active")
-            .setContentText("Monitoring display events and battery")
+            .setContentTitle("Profiler Active")
+            .setContentText("Monitoring system events")
             .setSmallIcon(android.R.drawable.ic_menu_info_details)
             .setOngoing(true)
             .setContentIntent(pendingIntent)

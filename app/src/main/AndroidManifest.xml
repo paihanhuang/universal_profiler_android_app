@@ -10,6 +10,9 @@
     
     <!-- Required for posting notifications (Android 13+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    
+    <!-- Required for auto-start at boot -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <application
         android:allowBackup="true"
@@ -29,7 +32,7 @@
         </activity>
 
         <service
-            android:name=".ProfilerService"
+            android:name=".CoreService"
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="specialUse">
@@ -37,6 +40,15 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="battery_profiling" />
         </service>
+        
+        <receiver
+            android:name=".BootReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
 
     </application>
 

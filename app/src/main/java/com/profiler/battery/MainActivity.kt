@@ -81,14 +81,14 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun startProfiling() {
-        ProfilerService.start(this)
-        Toast.makeText(this, "Profiler started", Toast.LENGTH_SHORT).show()
+        CoreService.start(this)
+        Toast.makeText(this, "Core Service started", Toast.LENGTH_SHORT).show()
         updateStatus()
     }
     
     private fun stopProfiling() {
-        ProfilerService.stop(this)
-        Toast.makeText(this, "Profiler stopped", Toast.LENGTH_SHORT).show()
+        CoreService.stop(this)
+        Toast.makeText(this, "Core Service stopped", Toast.LENGTH_SHORT).show()
         updateStatus()
     }
     
@@ -124,7 +124,7 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun updateStatus() {
-        val isRunning = ProfilerService.isRunning
+        val isRunning = CoreService.isRunning
         
         // Update UI immediately for status
         statusText.text = if (isRunning) "Status: RUNNING" else "Status: STOPPED"
