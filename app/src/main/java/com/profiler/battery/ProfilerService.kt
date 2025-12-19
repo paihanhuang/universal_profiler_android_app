@@ -55,6 +55,7 @@ class ProfilerService : Service() {
     
     private lateinit var receiver: PowerEventReceiver
     private lateinit var dbHandler: DBHandler
+    private lateinit var broadcastHandler: AndroidBroadcastHandler
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     
     override fun onCreate() {
@@ -69,8 +70,11 @@ class ProfilerService : Service() {
         // Insert system metadata for this session via message queue
         dbHandler.send(DBMessage.InsertSystemInfo(this, sessionId))
         
+        // Create broadcast handler thread for processing broadcasts off main thread
+        broadcastHandler = AndroidBroadcastHandler()
+        
         // Create receiver with callback to flush buffer
-        receiver = PowerEventReceiver(eventBuffer) {
+        receiver = PowerEventReceiver(eventBuffer, broadcastHandler) {
             // Called when screen turns ON - parse buffer and send to DBHandler
             flushBufferAsync()
         }
@@ -103,6 +107,9 @@ class ProfilerService : Service() {
         // Final flush - parse remaining buffer and flush via DBHandler
         flushBufferSync()
         dbHandler.sendSync(DBMessage.FlushPending())
+        
+        // Shutdown broadcast handler thread
+        broadcastHandler.shutdown()
         
         // Cancel coroutine scope
         serviceScope.cancel()

@@ -33,6 +33,7 @@ import android.telecom.TelecomManager
  */
 class PowerEventReceiver(
     private val eventBuffer: EventRingBuffer,
+    private val broadcastHandler: AndroidBroadcastHandler,
     private val onScreenOn: (() -> Unit)? = null  // Callback for flush trigger
 ) : BroadcastReceiver() {
     
@@ -66,6 +67,20 @@ class PowerEventReceiver(
     private var lastScreenOffTime = 0L
     
     override fun onReceive(context: Context, intent: Intent) {
+        // Capture action on main thread (fast)
+        val action = intent.action ?: return
+        
+        // Dispatch all processing to dedicated broadcast handler thread
+        broadcastHandler.post {
+            processBroadcast(context, action)
+        }
+    }
+    
+    /**
+     * Process broadcast on dedicated handler thread.
+     * Called from AndroidBroadcastHandler thread, NOT main thread.
+     */
+    private fun processBroadcast(context: Context, action: String) {
         // Get battery manager for capacity reading
         val batteryManager = context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
         
@@ -80,7 +95,7 @@ class PowerEventReceiver(
             -1  // Unavailable on this device
         }
         
-        when (intent.action) {
+        when (action) {
             Intent.ACTION_SCREEN_OFF -> {
                 val reason = detectScreenOffReason(context)
                 lastScreenOffTime = System.currentTimeMillis()
