@@ -87,9 +87,62 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun stopProfiling() {
+        // 1. Stop the service
         CoreService.stop(this)
-        Toast.makeText(this, "Core Service stopped", Toast.LENGTH_SHORT).show()
+        
+        // 2. Flush any pending data to disk synchronously
+        val dbHandler = DBHandler.getInstance(this)
+        // Use a background thread to avoid blocking UI during flush/share prep
+        Thread {
+            dbHandler.sendSync(DBMessage.FlushPending())
+            
+            // 3. Prepare and share the file
+            shareDatabaseFile()
+        }.start()
+        
+        Toast.makeText(this, "Stopping service and preparing email...", Toast.LENGTH_LONG).show()
         updateStatus()
+    }
+    
+    private fun shareDatabaseFile() {
+        try {
+            val dbPath = getDatabasePath(ProfilerDatabase.DATABASE_NAME)
+            if (!dbPath.exists()) {
+                runOnUiThread { Toast.makeText(this, "Database not found", Toast.LENGTH_SHORT).show() }
+                return
+            }
+
+            val uri: Uri = FileProvider.getUriForFile(
+                this,
+                "${packageName}.fileprovider",
+                dbPath
+            )
+
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = "application/vnd.sqlite3" // Or application/octet-stream
+                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_SUBJECT, "Battery Profiler Database Export")
+                putExtra(Intent.EXTRA_TEXT, "Attached is the profiler.db database file.")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            
+            val chooser = Intent.createChooser(intent, "Email Database")
+            // Grant permissions to the choosing app
+            val resInfoList = packageManager.queryIntentActivities(chooser, PackageManager.MATCH_DEFAULT_ONLY)
+            for (resolveInfo in resInfoList) {
+                val packageName = resolveInfo.activityInfo.packageName
+                grantUriPermission(packageName, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            
+            runOnUiThread {
+                startActivity(chooser)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            runOnUiThread {
+                Toast.makeText(this, "Failed to share DB: ${e.message}", Toast.LENGTH_LONG).show()
+            }
+        }
     }
     
     private fun viewLog() {

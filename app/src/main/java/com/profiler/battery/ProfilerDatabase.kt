@@ -353,7 +353,7 @@ class ProfilerDatabase private constructor(context: Context) : SQLiteOpenHelper(
         )
         
         val sb = StringBuilder(4096)  // Pre-sized to reduce reallocation
-        sb.appendLine("id,monotonic_ms,wall_clock_ms,event_type,battery_mah,wake_reason,session_id")
+        sb.appendLine("id,wall_clock_ms,monotonic_ms,event_type,battery_mah,wake_reason,session_id")
         
         cursor.use {
             // Cache column indexes
@@ -368,9 +368,9 @@ class ProfilerDatabase private constructor(context: Context) : SQLiteOpenHelper(
             while (it.moveToNext()) {
                 sb.append(it.getLong(idIdx))
                 sb.append(',')
-                sb.append(it.getLong(monoIdx))
-                sb.append(',')
                 sb.append(it.getLong(wallIdx))
+                sb.append(',')
+                sb.append(it.getLong(monoIdx))
                 sb.append(',')
                 sb.append(it.getInt(typeIdx))
                 sb.append(',')
