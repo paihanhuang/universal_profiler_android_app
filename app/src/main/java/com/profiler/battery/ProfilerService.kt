@@ -34,6 +34,10 @@ class ProfilerService : Service() {
         // Shared event buffer - accessible from receiver and for status display
         val eventBuffer = EventRingBuffer(1024)
         
+        // Current session ID
+        var sessionId: String = ""
+            private set
+        
         // Service state
         var isRunning = false
             private set
@@ -50,19 +54,26 @@ class ProfilerService : Service() {
     }
     
     private lateinit var receiver: PowerEventReceiver
-    private lateinit var logger: EventLogger
+    private lateinit var database: ProfilerDatabase
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     
     override fun onCreate() {
         super.onCreate()
         
-        // Initialize logger
-        logger = EventLogger(this)
-        logger.initSession()
+        // Generate session ID based on boot ID + app start time
+        sessionId = "${BootSession.bootId}_${BootSession.appStartWallClockMs}"
         
-        // Create receiver with flush callback
+        // Initialize database
+        database = ProfilerDatabase.getInstance(this)
+        
+        // Insert system metadata for this session
+        serviceScope.launch {
+            database.insertSystemInfo(this@ProfilerService, sessionId)
+        }
+        
+        // Create receiver with database write callback
         receiver = PowerEventReceiver(eventBuffer) {
-            // Called when screen turns ON - safe to flush
+            // Called when screen turns ON - safe to flush to database
             flushBufferAsync()
         }
         
@@ -94,6 +105,9 @@ class ProfilerService : Service() {
         // Final flush before stopping
         flushBufferSync()
         
+        // Close database
+        // Don't close singleton - it manages its own lifecycle
+        
         // Cancel coroutine scope
         serviceScope.cancel()
         
@@ -117,13 +131,40 @@ class ProfilerService : Service() {
     }
     
     /**
-     * Flush buffer synchronously.
+     * Flush buffer to database synchronously using batched transaction.
+     * All events are collected first, then written in a single transaction.
      */
     private fun flushBufferSync() {
-        val sb = StringBuilder(8192)  // Pre-sized to avoid reallocation
+        // Drain buffer
+        val sb = StringBuilder()
         val count = eventBuffer.drain(sb)
-        if (count > 0) {
-            logger.appendEvents(sb.toString())
+        if (count == 0) return
+        
+        // Parse CSV into event list (collect all first, then batch insert)
+        val events = mutableListOf<ScreenStateEvent>()
+        
+        sb.lines().filter { it.isNotBlank() }.forEach { line ->
+            val parts = line.split(",")
+            if (parts.size >= 4) {
+                try {
+                    events.add(
+                        ScreenStateEvent(
+                            monotonicMs = parts[0].toLong(),
+                            wallClockMs = parts[1].toLong(),
+                            eventType = parts[2].toInt(),
+                            batteryMah = parts[3].toIntOrNull(),
+                            sessionId = sessionId
+                        )
+                    )
+                } catch (e: Exception) {
+                    // Skip malformed entries
+                }
+            }
+        }
+        
+        // Batch insert all events in a single transaction
+        if (events.isNotEmpty()) {
+            database.insertScreenStateBatch(events)
         }
     }
     

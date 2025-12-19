@@ -93,35 +93,38 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun viewLog() {
-        val logger = EventLogger(this)
-        val log = logger.readLog()
+        val database = ProfilerDatabase.getInstance(this)
+        val csv = database.exportToCsv()
+        // Don't close singleton
         
-        if (log.isEmpty()) {
-            Toast.makeText(this, "No log data yet", Toast.LENGTH_SHORT).show()
+        if (csv.lines().size <= 1) {
+            Toast.makeText(this, "No data yet", Toast.LENGTH_SHORT).show()
             return
         }
         
-        // Show log in a simple dialog or share
+        // Share CSV data
         val intent = Intent(Intent.ACTION_SEND).apply {
             type = "text/csv"
-            putExtra(Intent.EXTRA_TEXT, log)
-            putExtra(Intent.EXTRA_SUBJECT, "Battery Profiler Log")
+            putExtra(Intent.EXTRA_TEXT, csv)
+            putExtra(Intent.EXTRA_SUBJECT, "Battery Profiler Data")
         }
-        startActivity(Intent.createChooser(intent, "Share Log"))
+        startActivity(Intent.createChooser(intent, "Share Data"))
     }
     
     private fun clearLog() {
-        val logger = EventLogger(this)
-        logger.clearLog()
-        Toast.makeText(this, "Log cleared", Toast.LENGTH_SHORT).show()
+        // Close singleton and delete database
+        ProfilerDatabase.closeInstance()
+        deleteDatabase(ProfilerDatabase.DATABASE_NAME)
+        Toast.makeText(this, "Database cleared", Toast.LENGTH_SHORT).show()
         updateStatus()
     }
     
     private fun updateStatus() {
         val isRunning = ProfilerService.isRunning
-        val eventCount = ProfilerService.eventBuffer.totalCount()
-        val logger = EventLogger(this)
-        val logSize = logger.getLogFileSize()
+        val database = ProfilerDatabase.getInstance(this)
+        val eventCount = database.getEventCount()
+        val dbSize = database.getDatabaseSize(this)
+        // Don't close singleton
         
         statusText.text = if (isRunning) "Status: RUNNING" else "Status: STOPPED"
         statusText.setTextColor(
@@ -131,8 +134,8 @@ class MainActivity : AppCompatActivity() {
                 ContextCompat.getColor(this, android.R.color.holo_red_dark)
         )
         
-        eventCountText.text = "Events captured: $eventCount"
-        logSizeText.text = "Log size: ${formatBytes(logSize)}"
+        eventCountText.text = "Events in DB: $eventCount"
+        logSizeText.text = "DB size: ${formatBytes(dbSize)}"
         
         startButton.isEnabled = !isRunning
         stopButton.isEnabled = isRunning
