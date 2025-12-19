@@ -55,6 +55,7 @@ class ProfilerService : Service() {
     
     private lateinit var receiver: PowerEventReceiver
     private lateinit var database: ProfilerDatabase
+    private lateinit var batchWriter: BatchWriter
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     
     override fun onCreate() {
@@ -63,8 +64,9 @@ class ProfilerService : Service() {
         // Generate session ID based on boot ID + app start time
         sessionId = "${BootSession.bootId}_${BootSession.appStartWallClockMs}"
         
-        // Initialize database
+        // Initialize database and batch writer
         database = ProfilerDatabase.getInstance(this)
+        batchWriter = BatchWriter.getInstance(this)
         
         // Insert system metadata for this session
         serviceScope.launch {
@@ -73,7 +75,7 @@ class ProfilerService : Service() {
         
         // Create receiver with database write callback
         receiver = PowerEventReceiver(eventBuffer) {
-            // Called when screen turns ON - safe to flush to database
+            // Called when screen turns ON - parse buffer and queue to batch writer
             flushBufferAsync()
         }
         
@@ -102,11 +104,9 @@ class ProfilerService : Service() {
             // Already unregistered
         }
         
-        // Final flush before stopping
+        // Final flush - parse remaining buffer and force flush batch writer
         flushBufferSync()
-        
-        // Close database
-        // Don't close singleton - it manages its own lifecycle
+        batchWriter.forceFlush()
         
         // Cancel coroutine scope
         serviceScope.cancel()
@@ -131,8 +131,10 @@ class ProfilerService : Service() {
     }
     
     /**
-     * Flush buffer to database synchronously using batched transaction.
-     * All events are collected first, then written in a single transaction.
+     * Flush ring buffer to batch writer.
+     * Events are queued and will be written to DB when:
+     * - 500 events are queued, OR
+     * - 5 minutes have passed since first queued event
      */
     private fun flushBufferSync() {
         // Drain buffer
@@ -140,7 +142,7 @@ class ProfilerService : Service() {
         val count = eventBuffer.drain(sb)
         if (count == 0) return
         
-        // Parse CSV into event list (collect all first, then batch insert)
+        // Parse CSV into event list
         val events = mutableListOf<ScreenStateEvent>()
         
         sb.lines().filter { it.isNotBlank() }.forEach { line ->
@@ -162,9 +164,9 @@ class ProfilerService : Service() {
             }
         }
         
-        // Batch insert all events in a single transaction
+        // Queue events to batch writer (will flush at 500 ops or 5 min)
         if (events.isNotEmpty()) {
-            database.insertScreenStateBatch(events)
+            batchWriter.queueEvents(events)
         }
     }
     
